@@ -10,6 +10,21 @@ library(here)
 #-----------------------------------------------------------------------------
 # PART 0: SETUP - Time window and intersection infrastructure
 #-----------------------------------------------------------------------------
+# Helper function for concentration curves
+compute_concentration <- function(counts, option_name) {
+  tibble(count = counts) |>
+    filter(count > 0) |>
+    arrange(desc(count)) |>
+    mutate(
+      cum_count = cumsum(count),
+      total = sum(count),
+      pct_crime = cum_count / total * 100,
+      pct_blocks = row_number() / n() * 100,
+      option = option_name
+    )
+}
+
+
 
 # Analysis window: 5 years prior to 9/30/2025
 end_date   <- as.Date("2025-09-30")
@@ -20,6 +35,8 @@ cat("Analysis window:", as.character(start_date), "to", as.character(end_date), 
 # For "past year" gun violence distribution
 end_date_1yr   <- end_date
 start_date_1yr <- end_date - years(1) + days(1)
+
+
 
 #-----------------------------------------------------------------------------
 # Build intersection infrastructure (from previous work)
@@ -650,6 +667,8 @@ p_capture <- ggplot(capture_long |> filter(tier == "Top 100"),
   theme_minimal() +
   geom_text(aes(label = paste0(pct, "%")), position = position_dodge(0.9), vjust = -0.5, size = 3)
 
+p_capture
+
 ggsave(here("output", "capture_rates.png"), p_capture, width = 10, height = 6)
 
 #=============================================================================
@@ -788,6 +807,268 @@ pd_street |> head(20) |> print()
 write_csv(pd_violent, here("output", "pd_desc_breakdown_violent.csv"))
 write_csv(pd_street, here("output", "pd_desc_breakdown_street.csv"))
 
+
+#=============================================================================
+# ANALYSIS 8A: CRIME DISTRIBUTION ON TOP BLOCKS
+# Question: Of all crimes on top blocks, what is the composition?
+#=============================================================================
+
+cat("\n")
+cat("================================================================\n")
+cat("ANALYSIS 8A: CRIME COMPOSITION ON TOP BLOCKS\n")
+cat("================================================================\n")
+cat("(What types of crimes occur on blocks selected by each strategy?)\n\n")
+
+#-----------------------------------------------------------------------------
+# 8A.1: ofns_desc distribution on top blocks
+#-----------------------------------------------------------------------------
+
+# Function to get crime distribution on a set of blocks
+get_crime_distribution <- function(crime_df, block_ids, group_var) {
+  crime_df |>
+    filter(physical_id %in% block_ids) |>
+    count({{ group_var }}, name = "n") |>
+    mutate(
+      pct = round(n / sum(n) * 100, 1),
+      cum_pct = round(cumsum(n) / sum(n) * 100, 1)
+    ) |>
+    arrange(desc(n))
+}
+
+# Get block IDs for each tier/option
+gun_top100_ids <- master_targeting |> filter(gun_tier == "Top 100") |> pull(physical_id)
+gun_101_200_ids <- master_targeting |> filter(gun_tier == "101-200") |> pull(physical_id)
+street_top100_ids <- master_targeting |> filter(street_tier == "Top 100") |> pull(physical_id)
+street_101_200_ids <- master_targeting |> filter(street_tier == "101-200") |> pull(physical_id)
+violent_top100_ids <- master_targeting |> filter(violent_tier == "Top 100") |> pull(physical_id)
+violent_101_200_ids <- master_targeting |> filter(violent_tier == "101-200") |> pull(physical_id)
+
+# --- OFNS_DESC distributions ---
+
+cat("=== OFFENSE CATEGORY (ofns_desc) DISTRIBUTION ===\n\n")
+
+# Gun Violence Top 100 - what violent crimes occur there?
+cat("GUN VIOLENCE TOP 100 BLOCKS - Violent Crime Composition:\n")
+ofns_on_gun_top100 <- get_crime_distribution(violent_with_tiers, gun_top100_ids, ofns_desc) |>
+  mutate(targeting = "Gun Violence", tier = "Top 100")
+print(ofns_on_gun_top100)
+
+cat("\nGUN VIOLENCE 101-200 BLOCKS - Violent Crime Composition:\n")
+ofns_on_gun_101_200 <- get_crime_distribution(violent_with_tiers, gun_101_200_ids, ofns_desc) |>
+  mutate(targeting = "Gun Violence", tier = "101-200")
+print(ofns_on_gun_101_200)
+
+cat("\n---\n")
+cat("STREET VIOLENT TOP 100 BLOCKS - Violent Crime Composition:\n")
+ofns_on_street_top100 <- get_crime_distribution(violent_with_tiers, street_top100_ids, ofns_desc) |>
+  mutate(targeting = "Street Violent", tier = "Top 100")
+print(ofns_on_street_top100)
+
+cat("\nSTREET VIOLENT 101-200 BLOCKS - Violent Crime Composition:\n")
+ofns_on_street_101_200 <- get_crime_distribution(violent_with_tiers, street_101_200_ids, ofns_desc) |>
+  mutate(targeting = "Street Violent", tier = "101-200")
+print(ofns_on_street_101_200)
+
+cat("\n---\n")
+cat("ALL VIOLENT TOP 100 BLOCKS - Violent Crime Composition:\n")
+ofns_on_violent_top100 <- get_crime_distribution(violent_with_tiers, violent_top100_ids, ofns_desc) |>
+  mutate(targeting = "All Violent", tier = "Top 100")
+print(ofns_on_violent_top100)
+
+cat("\nALL VIOLENT 101-200 BLOCKS - Violent Crime Composition:\n")
+ofns_on_violent_101_200 <- get_crime_distribution(violent_with_tiers, violent_101_200_ids, ofns_desc) |>
+  mutate(targeting = "All Violent", tier = "101-200")
+print(ofns_on_violent_101_200)
+
+# Combine all ofns distributions
+ofns_distribution_all <- bind_rows(
+  ofns_on_gun_top100,
+  ofns_on_gun_101_200,
+  ofns_on_street_top100,
+  ofns_on_street_101_200,
+  ofns_on_violent_top100,
+  ofns_on_violent_101_200
+)
+
+write_csv(ofns_distribution_all, here("output", "ofns_distribution_on_top_blocks.csv"))
+
+#-----------------------------------------------------------------------------
+# 8A.2: Side-by-side comparison table for ofns_desc
+#-----------------------------------------------------------------------------
+
+cat("\n")
+cat("=== SIDE-BY-SIDE COMPARISON: ofns_desc ===\n\n")
+
+# Pivot to wide format for easy comparison
+ofns_comparison <- ofns_distribution_all |>
+  mutate(label = paste0(targeting, "_", tier)) |>
+  select(ofns_desc, label, pct) |>
+  pivot_wider(names_from = label, values_from = pct, values_fill = 0) |>
+  arrange(desc(`Gun Violence_Top 100`))
+
+cat("% of violent crime by offense type on each set of blocks:\n\n")
+print(ofns_comparison, n = 20)
+
+write_csv(ofns_comparison, here("output", "ofns_comparison_wide.csv"))
+
+#-----------------------------------------------------------------------------
+# 8A.3: pd_desc distribution on top blocks
+#-----------------------------------------------------------------------------
+
+cat("\n")
+cat("=== CRIME SUBTYPE (pd_desc) DISTRIBUTION ===\n\n")
+
+# Gun Violence blocks
+cat("GUN VIOLENCE TOP 100 BLOCKS - Crime Subtype Composition:\n")
+pd_on_gun_top100 <- get_crime_distribution(violent_with_tiers, gun_top100_ids, pd_desc) |>
+  mutate(targeting = "Gun Violence", tier = "Top 100")
+print(pd_on_gun_top100 |> head(15))
+
+cat("\nGUN VIOLENCE 101-200 BLOCKS - Crime Subtype Composition:\n")
+pd_on_gun_101_200 <- get_crime_distribution(violent_with_tiers, gun_101_200_ids, pd_desc) |>
+  mutate(targeting = "Gun Violence", tier = "101-200")
+print(pd_on_gun_101_200 |> head(15))
+
+cat("\n---\n")
+cat("STREET VIOLENT TOP 100 BLOCKS - Crime Subtype Composition:\n")
+pd_on_street_top100 <- get_crime_distribution(violent_with_tiers, street_top100_ids, pd_desc) |>
+  mutate(targeting = "Street Violent", tier = "Top 100")
+print(pd_on_street_top100 |> head(15))
+
+cat("\nSTREET VIOLENT 101-200 BLOCKS - Crime Subtype Composition:\n")
+pd_on_street_101_200 <- get_crime_distribution(violent_with_tiers, street_101_200_ids, pd_desc) |>
+  mutate(targeting = "Street Violent", tier = "101-200")
+print(pd_on_street_101_200 |> head(15))
+
+cat("\n---\n")
+cat("ALL VIOLENT TOP 100 BLOCKS - Crime Subtype Composition:\n")
+pd_on_violent_top100 <- get_crime_distribution(violent_with_tiers, violent_top100_ids, pd_desc) |>
+  mutate(targeting = "All Violent", tier = "Top 100")
+print(pd_on_violent_top100 |> head(15))
+
+cat("\nALL VIOLENT 101-200 BLOCKS - Crime Subtype Composition:\n")
+pd_on_violent_101_200 <- get_crime_distribution(violent_with_tiers, violent_101_200_ids, pd_desc) |>
+  mutate(targeting = "All Violent", tier = "101-200")
+print(pd_on_violent_101_200 |> head(15))
+
+# Combine all pd_desc distributions
+pd_distribution_all <- bind_rows(
+  pd_on_gun_top100,
+  pd_on_gun_101_200,
+  pd_on_street_top100,
+  pd_on_street_101_200,
+  pd_on_violent_top100,
+  pd_on_violent_101_200
+)
+
+write_csv(pd_distribution_all, here("output", "pd_distribution_on_top_blocks.csv"))
+
+#-----------------------------------------------------------------------------
+# 8A.4: Side-by-side comparison table for pd_desc (top 20)
+#-----------------------------------------------------------------------------
+
+cat("\n")
+cat("=== SIDE-BY-SIDE COMPARISON: pd_desc (Top 20) ===\n\n")
+
+# Get top 20 pd_desc across all targeting options
+top_pd_desc <- pd_distribution_all |>
+  group_by(pd_desc) |>
+  summarise(total_n = sum(n), .groups = "drop") |>
+  slice_max(total_n, n = 20) |>
+  pull(pd_desc)
+
+pd_comparison <- pd_distribution_all |>
+  filter(pd_desc %in% top_pd_desc) |>
+  mutate(label = paste0(targeting, "_", tier)) |>
+  select(pd_desc, label, pct) |>
+  pivot_wider(names_from = label, values_from = pct, values_fill = 0) |>
+  arrange(desc(`Gun Violence_Top 100`))
+
+cat("% of violent crime by subtype on each set of blocks (top 20 subtypes):\n\n")
+print(pd_comparison, n = 20)
+
+write_csv(pd_comparison, here("output", "pd_comparison_wide.csv"))
+
+#-----------------------------------------------------------------------------
+# 8A.5: Summary - Key differences between targeting options
+#-----------------------------------------------------------------------------
+
+cat("\n")
+cat("=== KEY DIFFERENCES IN CRIME MIX ===\n\n")
+
+# Calculate the difference in composition between gun-targeted and street-targeted blocks
+mix_diff <- ofns_comparison |>
+  mutate(
+    gun_vs_street_top100 = `Gun Violence_Top 100` - `Street Violent_Top 100`,
+    gun_vs_violent_top100 = `Gun Violence_Top 100` - `All Violent_Top 100`
+  ) |>
+  select(ofns_desc, `Gun Violence_Top 100`, `Street Violent_Top 100`, 
+         `All Violent_Top 100`, gun_vs_street_top100, gun_vs_violent_top100) |>
+  arrange(desc(abs(gun_vs_street_top100)))
+
+cat("Offense mix differences (positive = more on gun blocks):\n\n")
+print(mix_diff)
+
+write_csv(mix_diff, here("output", "offense_mix_differences.csv"))
+
+#-----------------------------------------------------------------------------
+# 8A.6: Visualization - Crime composition by targeting option
+#-----------------------------------------------------------------------------
+
+# Stacked bar chart
+ofns_plot_data <- ofns_distribution_all |>
+  filter(tier == "Top 100") |>
+  group_by(targeting) |>
+  slice_max(n, n = 5) |>  # Top 5 offense types per option
+  ungroup()
+
+p_composition <- ggplot(ofns_plot_data, 
+                        aes(x = targeting, y = pct, fill = reorder(ofns_desc, -pct))) +
+  geom_col(position = "stack") +
+  scale_fill_brewer(palette = "Set3") +
+  labs(
+    title = "Violent Crime Composition on Top 100 Blocks",
+    subtitle = "What types of crime occur on blocks selected by each strategy?",
+    x = "Targeting Option",
+    y = "% of Violent Crime on Those Blocks",
+    fill = "Offense Type"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+p_composition
+
+ggsave(here("output", "crime_composition_top100.png"), p_composition, width = 12, height = 7)
+
+# Faceted comparison
+p_composition_facet <- ofns_distribution_all |>
+  filter(ofns_desc %in% c("ASSAULT 3 & RELATED OFFENSES", "FELONY ASSAULT", 
+                          "ROBBERY", "MURDER & NON-NEGL. MANSLAUGHTER")) |>
+  ggplot(aes(x = tier, y = pct, fill = targeting)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ofns_desc, scales = "free_y") +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "Crime Mix by Targeting Option and Tier",
+    x = "Block Tier",
+    y = "% of Crimes on Those Blocks",
+    fill = "Targeting Option"
+  ) +
+  theme_minimal()
+
+p_composition_facet
+
+ggsave(here("output", "crime_composition_by_offense.png"), p_composition_facet, width = 12, height = 8)
+
+cat("\nAnalysis 8A complete. Output files:\n")
+cat("  - ofns_distribution_on_top_blocks.csv\n")
+cat("  - ofns_comparison_wide.csv\n")
+cat("  - pd_distribution_on_top_blocks.csv\n")
+cat("  - pd_comparison_wide.csv\n")
+cat("  - offense_mix_differences.csv\n")
+cat("  - crime_composition_top100.png\n")
+cat("  - crime_composition_by_offense.png\n")
+
 #=============================================================================
 # ANALYSIS 9: GUN VIOLENCE FREQUENCY DISTRIBUTION
 #=============================================================================
@@ -924,15 +1205,21 @@ master_targeting <- master_targeting |>
     blend_30_70_rank = rank(-blend_gun30_street70, ties.method = "first")
   )
 
-# Compare blend capture rates
+# Get block IDs for each blend
+blend_70_30_top100 <- master_targeting |> filter(blend_70_30_rank <= 100) |> pull(physical_id)
+blend_50_50_top100 <- master_targeting |> filter(blend_50_50_rank <= 100) |> pull(physical_id)
+blend_30_70_top100 <- master_targeting |> filter(blend_30_70_rank <= 100) |> pull(physical_id)
+
+# Compare blend capture rates - use list() not c()
 blend_capture <- tibble(
   blend = c("Gun Only", "70/30", "50/50", "30/70", "Street Only"),
-  top100_blocks = c(gun_top100, 
-                    master_targeting |> filter(blend_70_30_rank <= 100) |> pull(physical_id),
-                    master_targeting |> filter(blend_50_50_rank <= 100) |> pull(physical_id),
-                    master_targeting |> filter(blend_30_70_rank <= 100) |> pull(physical_id),
-                    street_top100) |>
-    map(~.x)
+  top100_blocks = list(
+    gun_top100,
+    blend_70_30_top100,
+    blend_50_50_top100,
+    blend_30_70_top100,
+    street_top100
+  )
 ) |>
   mutate(
     gun_captured = map_dbl(top100_blocks, ~sum(master_targeting$gun_count[master_targeting$physical_id %in% .x])),
@@ -949,6 +1236,13 @@ print(blend_capture)
 
 write_csv(blend_capture, here("output", "blend_comparison.csv"))
 
+# Also show overlap between blends
+cat("\n\nOVERLAP BETWEEN BLENDS:\n")
+cat("Gun Only ∩ 70/30:", length(intersect(gun_top100, blend_70_30_top100)), "\n")
+cat("Gun Only ∩ 50/50:", length(intersect(gun_top100, blend_50_50_top100)), "\n")
+cat("Gun Only ∩ Street Only:", length(intersect(gun_top100, street_top100)), "\n")
+cat("70/30 ∩ 50/50:", length(intersect(blend_70_30_top100, blend_50_50_top100)), "\n")
+cat("50/50 ∩ 30/70:", length(intersect(blend_50_50_top100, blend_30_70_top100)), "\n")
 #=============================================================================
 # FINAL SUMMARY
 #=============================================================================

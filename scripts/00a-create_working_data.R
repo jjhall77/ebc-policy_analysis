@@ -76,6 +76,8 @@ shootings_sf <- shootings %>%
 
 #comvine the shots fired datasets
 
+shots_fired_new <- shots_fired_new %>%
+  mutate(date = mdy(rec_create_dt))
 #-------------------------------------------------
 # 0) DEFINE CUTOFF DATE
 #-------------------------------------------------
@@ -97,6 +99,7 @@ cutoff_date <- min(shots_fired_new$date, na.rm = TRUE)
 # Rationale: avoid duplicate events in the overlap window
 
 sf_2017_std <- shots_fired_since_2017 %>%
+  mutate(date = mdy(rpt_dt)) %>%
   filter(date < cutoff_date) %>%   # HARD STOP before new file begins
   transmute(
     source = "shots_fired_since_2017",   # provenance retained

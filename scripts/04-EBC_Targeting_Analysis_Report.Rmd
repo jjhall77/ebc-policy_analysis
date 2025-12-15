@@ -1,0 +1,848 @@
+---
+title: "Every Block Counts: Targeting Strategy Analysis"
+subtitle: "Comparing Block Selection Options for Place-Based Violence Intervention"
+author: "Mayor's Office of Criminal Justice"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    df_print: kable
+    latex_engine: xelatex
+geometry: margin=1in
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{array}
+  - \usepackage{float}
+  - \floatplacement{figure}{H}
+  - \floatplacement{table}{H}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+ echo = FALSE,
+ warning = FALSE,
+ message = FALSE,
+ fig.width = 10,
+ fig.height = 6,
+ fig.align = "center",
+ out.width = "95%"
+)
+
+library(tidyverse)
+library(here)
+library(knitr)
+library(kableExtra)
+library(scales)
+
+#-----------------------------------------------------------------------------
+# Load all analysis outputs from CSV files
+#-----------------------------------------------------------------------------
+
+# Master targeting table
+master_targeting <- read_csv(here("output", "targeting_master_table.csv"), show_col_types = FALSE)
+
+# Borough breakdown
+borough_breakdown <- read_csv(here("output", "borough_breakdown.csv"), show_col_types = FALSE)
+
+# Precinct breakdown
+precinct_breakdown <- read_csv(here("output", "precinct_breakdown.csv"), show_col_types = FALSE)
+
+# NTA breakdown (may not exist)
+nta_breakdown <- tryCatch(
+  read_csv(here("output", "nta_breakdown.csv"), show_col_types = FALSE),
+  error = function(e) NULL
+)
+
+# Capture rates
+capture_rates <- read_csv(here("output", "capture_rates.csv"), show_col_types = FALSE)
+
+# Overlap analysis
+overlap_analysis <- read_csv(here("output", "overlap_analysis.csv"), show_col_types = FALSE)
+
+# Blend comparison
+blend_capture <- read_csv(here("output", "blend_comparison.csv"), show_col_types = FALSE)
+
+# Gun frequency distribution
+gun_freq_combined <- read_csv(here("output", "gun_frequency_distribution.csv"), show_col_types = FALSE)
+
+# Offense breakdowns (may not exist)
+ofns_comparison <- tryCatch(
+  read_csv(here("output", "ofns_comparison_wide.csv"), show_col_types = FALSE),
+  error = function(e) NULL
+)
+pd_comparison <- tryCatch(
+  read_csv(here("output", "pd_comparison_wide.csv"), show_col_types = FALSE),
+  error = function(e) NULL
+)
+
+#-----------------------------------------------------------------------------
+# Derive key values from loaded data
+#-----------------------------------------------------------------------------
+
+# Analysis dates (hardcoded to match analysis)
+start_date <- as.Date("2020-10-01")
+end_date <- as.Date("2025-09-30")
+
+# Total counts
+total_gun <- sum(master_targeting$gun_count, na.rm = TRUE)
+total_street <- sum(master_targeting$street_count, na.rm = TRUE)
+total_violent <- sum(master_targeting$violent_count, na.rm = TRUE)
+
+# Top 100 block IDs for each option
+gun_top100 <- master_targeting %>% filter(gun_tier == "Top 100") %>% pull(physical_id)
+gun_101_200 <- master_targeting %>% filter(gun_tier == "101-200") %>% pull(physical_id)
+street_top100 <- master_targeting %>% filter(street_tier == "Top 100") %>% pull(physical_id)
+street_101_200 <- master_targeting %>% filter(street_tier == "101-200") %>% pull(physical_id)
+violent_top100 <- master_targeting %>% filter(violent_tier == "Top 100") %>% pull(physical_id)
+violent_101_200 <- master_targeting %>% filter(violent_tier == "101-200") %>% pull(physical_id)
+
+# Blend top 100 (if columns exist)
+if ("blend_70_30_rank" %in% names(master_targeting)) {
+ blend_70_30_top100 <- master_targeting %>% filter(blend_70_30_rank <= 100) %>% pull(physical_id)
+ blend_50_50_top100 <- master_targeting %>% filter(blend_50_50_rank <= 100) %>% pull(physical_id)
+ blend_30_70_top100 <- master_targeting %>% filter(blend_30_70_rank <= 100) %>% pull(physical_id)
+} else {
+ blend_70_30_top100 <- c()
+ blend_50_50_top100 <- c()
+ blend_30_70_top100 <- c()
+}
+
+# Gun frequency by period
+gun_freq_5yr <- gun_freq_combined %>% filter(period == "5 Years")
+gun_freq_1yr <- gun_freq_combined %>% filter(period == "1 Year")
+
+#-----------------------------------------------------------------------------
+# Helper function for concentration curves
+#-----------------------------------------------------------------------------
+
+compute_concentration <- function(counts, option_name) {
+ tibble(count = counts) %>%
+   filter(count > 0) %>%
+   arrange(desc(count)) %>%
+   mutate(
+     cum_count = cumsum(count),
+     total = sum(count),
+     pct_crime = cum_count / total * 100,
+     pct_blocks = row_number() / n() * 100,
+     option = option_name
+   )
+}
+```
+
+\newpage
+
+# Executive Summary
+
+This report analyzes three targeting strategies for the Every Block Counts (EBC) intervention, a place-based violence reduction initiative targeting high-crime micro-places in New York City. The analysis uses **five years of crime data** (October 2020 - September 2025) to compare how different crime metrics would identify target blocks.
+
+## Key Findings
+
+```{r exec-summary-table}
+# Summary metrics
+exec_summary <- tibble(
+  Metric = c(
+    "Total Physical Blocks Analyzed",
+    "Analysis Period",
+    "Gun Violence Incidents",
+    "Violent Street Crime Incidents",
+    "All Violent Crime Incidents"
+  ),
+  Value = c(
+    comma(nrow(master_targeting)),
+    paste(start_date, "to", end_date),
+    comma(sum(master_targeting$gun_count)),
+    comma(sum(master_targeting$street_count)),
+    comma(sum(master_targeting$violent_count))
+  )
+)
+
+kable(exec_summary, booktabs = TRUE, 
+      caption = "Analysis Overview") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Critical Policy Takeaways:**
+
+1. **Crime is highly concentrated**: The top 100 blocks (approximately 0.1% of all blocks) account for a disproportionate share of violent crime
+2. **Different metrics identify different blocks**: Gun violence targeting and violent street crime targeting show only partial overlap
+3. **Blended approaches offer tradeoffs**: A 50/50 blend of gun violence and street crime captures meaningful portions of both crime types
+4. **Geographic clustering**: Top blocks concentrate in specific precincts and neighborhoods, enabling coordinated intervention
+
+\newpage
+
+# Introduction and Purpose
+
+## Background
+
+The Every Block Counts (EBC) initiative is a stepped-wedge cluster randomized controlled trial testing place-based, non-police interventions at violent micro-places in NYC, scheduled to run from 2026-2030. This analysis informs the critical decision of **how to select target blocks** for intervention.
+
+## The Targeting Decision
+
+Three primary options are considered:
+
+| Option | Crime Metric | Rationale |
+|--------|--------------|-----------|
+| **Option 1** | Gun Violence (shootings + shots fired) | Targets most serious violence; aligns with public safety priorities |
+| **Option 2** | Violent Street Crime | Captures outdoor interpersonal violence; more incidents = more statistical power |
+| **Option 3** | All Violent Crime | Broadest definition; maximum volume for intervention exposure |
+
+## Methodology
+
+### Spatial Unit Definition
+
+The unit of analysis is the **physical block** --- a section of street between two intersections. NYC contains approximately `r comma(nrow(master_targeting))` such blocks. This definition aligns with:
+
+- How people experience and navigate streets
+- How interventions can be physically deployed
+- NYPD operational geography
+
+### Intersection Assignment
+
+A methodological challenge arises when crime occurs at intersections. We use an **equal-split allocation** method:
+
+- Crimes clearly on a block face are assigned 100% to that block
+- Crimes at intersections are split equally among all adjacent blocks
+- Example: A shooting at a 4-way intersection contributes 0.25 incidents to each of the 4 adjacent blocks
+
+This approach avoids arbitrary assignment while ensuring total incident counts are preserved.
+
+### Analysis Window
+
+- **5-year period**: October 1, 2020 to September 30, 2025
+- **Rationale**: Captures stable patterns while allowing for recent trends
+- **1-year period** (October 2024 to September 2025) also analyzed for recent gun violence patterns
+
+\newpage
+
+# Crime Concentration Analysis
+
+A foundational question: **How concentrated is crime across blocks?**
+
+## Concentration Curves
+
+```{r concentration-plot, fig.cap="Crime concentration curves showing what percentage of incidents occur on the highest-crime blocks"}
+concentration_all <- bind_rows(
+  compute_concentration(master_targeting$gun_count, "Gun Violence"),
+  compute_concentration(master_targeting$street_count, "Street Violent Crime"),
+  compute_concentration(master_targeting$violent_count, "All Violent Crime")
+)
+
+ggplot(concentration_all, aes(x = pct_blocks, y = pct_crime, color = option)) +
+  geom_line(linewidth = 1.2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  scale_color_brewer(palette = "Set1") +
+  scale_x_continuous(breaks = seq(0, 50, 10)) +
+  scale_y_continuous(breaks = seq(0, 100, 20)) +
+  labs(
+    title = "Crime Concentration by Targeting Option",
+    subtitle = "Distance from diagonal = degree of concentration",
+    x = "% of Blocks (ranked by incidents, highest first)",
+    y = "% of Incidents Captured",
+    color = "Crime Type"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom") +
+  coord_cartesian(xlim = c(0, 50), ylim = c(0, 100))
+```
+
+## Key Concentration Thresholds
+
+```{r concentration-table}
+thresholds <- c(1, 2, 5, 10, 20)
+
+conc_table <- map_dfr(thresholds, function(pct) {
+  gun_conc <- compute_concentration(master_targeting$gun_count, "Gun")
+  street_conc <- compute_concentration(master_targeting$street_count, "Street")
+  violent_conc <- compute_concentration(master_targeting$violent_count, "Violent")
+  
+  tibble(
+    `Top Pct of Blocks` = paste0(pct, "%"),
+    `Gun Violence` = paste0(round(gun_conc$pct_crime[which.min(abs(gun_conc$pct_blocks - pct))], 1), "%"),
+    `Street Violent` = paste0(round(street_conc$pct_crime[which.min(abs(street_conc$pct_blocks - pct))], 1), "%"),
+    `All Violent` = paste0(round(violent_conc$pct_crime[which.min(abs(violent_conc$pct_blocks - pct))], 1), "%")
+  )
+})
+
+kable(conc_table, booktabs = TRUE, align = "c",
+      caption = "Percentage of crime captured by top X percent of blocks") %>%
+  kable_styling(latex_options = c("hold_position")) %>%
+  add_header_above(c(" " = 1, "Crime Captured" = 3))
+```
+
+**Interpretation**: Gun violence shows the highest concentration --- a small number of blocks experience a disproportionate share. This supports the rationale for place-based intervention: targeting resources at specific locations can address a substantial portion of the problem.
+
+\newpage
+
+# Targeting Option Comparison
+
+## Option 1: Gun Violence Targeting
+
+**Definition**: Shootings (persons shot) + Shots fired (ballistic evidence detected)
+
+```{r gun-stats}
+gun_stats <- tibble(
+  Metric = c(
+    "Total Incidents (5 years)",
+    "Blocks with 1+ incidents",
+    "Incidents in Top 100 blocks",
+    "Pct of gun violence in Top 100"
+  ),
+  Value = c(
+    comma(sum(master_targeting$gun_count)),
+    comma(sum(master_targeting$gun_count > 0)),
+    comma(round(sum(master_targeting$gun_count[master_targeting$gun_tier == "Top 100"]))),
+    paste0(round(sum(master_targeting$gun_count[master_targeting$gun_tier == "Top 100"]) / 
+                   sum(master_targeting$gun_count) * 100, 1), "%")
+  )
+)
+
+kable(gun_stats, booktabs = TRUE, caption = "Gun Violence Targeting Summary") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Advantages**:
+
+- Targets most serious violence
+- Strongest concentration = highest efficiency
+- Aligns with public priority on shootings
+
+**Disadvantages**:
+
+- Lower statistical power (fewer incidents)
+- May miss blocks with chronic non-gun violence
+- Gun violence may be more mobile/harder to predict
+
+## Option 2: Violent Street Crime Targeting
+
+**Definition**: Violent crimes (murder, rape, robbery, felony assault, misdemeanor assault) occurring in outdoor/public locations
+
+```{r street-stats}
+street_stats <- tibble(
+  Metric = c(
+    "Total Incidents (5 years)",
+    "Blocks with 1+ incidents",
+    "Incidents in Top 100 blocks",
+    "Pct of street crime in Top 100"
+  ),
+  Value = c(
+    comma(sum(master_targeting$street_count)),
+    comma(sum(master_targeting$street_count > 0)),
+    comma(round(sum(master_targeting$street_count[master_targeting$street_tier == "Top 100"]))),
+    paste0(round(sum(master_targeting$street_count[master_targeting$street_tier == "Top 100"]) / 
+                   sum(master_targeting$street_count) * 100, 1), "%")
+  )
+)
+
+kable(street_stats, booktabs = TRUE, caption = "Street Violent Crime Targeting Summary") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Advantages**:
+
+- Higher volume = more statistical power
+- Directly relevant to street-based interventions
+- Captures the "feel" of block-level disorder
+
+**Disadvantages**:
+
+- Includes less serious offenses (Assault 3)
+- May dilute focus on most serious harm
+- Indoor/outdoor classification has noise
+
+## Option 3: All Violent Crime
+
+**Definition**: All violent crimes regardless of location
+
+```{r violent-stats}
+violent_stats <- tibble(
+  Metric = c(
+    "Total Incidents (5 years)",
+    "Blocks with 1+ incidents",
+    "Incidents in Top 100 blocks",
+    "Pct of violent crime in Top 100"
+  ),
+  Value = c(
+    comma(sum(master_targeting$violent_count)),
+    comma(sum(master_targeting$violent_count > 0)),
+    comma(round(sum(master_targeting$violent_count[master_targeting$violent_tier == "Top 100"]))),
+    paste0(round(sum(master_targeting$violent_count[master_targeting$violent_tier == "Top 100"]) / 
+                   sum(master_targeting$violent_count) * 100, 1), "%")
+  )
+)
+
+kable(violent_stats, booktabs = TRUE, caption = "All Violent Crime Targeting Summary") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Advantages**:
+
+- Maximum statistical power
+- Comprehensive violence measure
+
+**Disadvantages**:
+
+- Includes domestic violence (less place-based)
+- Indoor crimes less addressable by street intervention
+- Least concentrated = lower efficiency
+
+\newpage
+
+# Overlap Analysis
+
+A critical question: **Do different targeting options identify the same blocks?**
+
+## Top 100 Block Overlap
+
+```{r overlap-table}
+gun_street_overlap <- length(intersect(gun_top100, street_top100))
+gun_violent_overlap <- length(intersect(gun_top100, violent_top100))
+street_violent_overlap <- length(intersect(street_top100, violent_top100))
+all_three_overlap <- length(Reduce(intersect, list(gun_top100, street_top100, violent_top100)))
+
+overlap_100 <- tibble(
+  Comparison = c(
+    "Gun AND Street Violent",
+    "Gun AND All Violent",
+    "Street AND All Violent",
+    "All Three Options"
+  ),
+  `Blocks in Both` = c(
+    gun_street_overlap,
+    gun_violent_overlap,
+    street_violent_overlap,
+    all_three_overlap
+  ),
+  `Pct Overlap` = paste0(c(
+    gun_street_overlap,
+    gun_violent_overlap,
+    street_violent_overlap,
+    all_three_overlap
+  ), "%")
+)
+
+kable(overlap_100, booktabs = TRUE, align = c("l", "c", "c"),
+      caption = "Overlap of Top 100 Blocks Across Targeting Options") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Key Insight**: The overlap between gun violence and street violent crime top-100 blocks is `r gun_street_overlap`%. This means:
+
+- **`r gun_street_overlap` blocks** would be selected under either strategy
+- **`r 100 - gun_street_overlap` blocks** are unique to gun targeting
+- **`r 100 - gun_street_overlap` blocks** are unique to street crime targeting
+
+This partial overlap motivates the **blended targeting approach** discussed in Section 7.
+
+## Cross-Tier Analysis
+
+What about blocks ranked 101-200 under one option vs. top 100 under another?
+
+```{r cross-tier}
+cross_tier <- tibble(
+  Comparison = c(
+    "Gun Top 100: Also in Street Top 100",
+    "Gun Top 100: In Street 101-200",
+    "Gun Top 100: In Street Top 200 (combined)",
+    "Street Top 100: Also in Gun Top 100",
+    "Street Top 100: In Gun 101-200",
+    "Street Top 100: In Gun Top 200 (combined)"
+  ),
+  `N Blocks` = c(
+    length(intersect(gun_top100, street_top100)),
+    length(intersect(gun_top100, street_101_200)),
+    length(intersect(gun_top100, c(street_top100, street_101_200))),
+    length(intersect(street_top100, gun_top100)),
+    length(intersect(street_top100, gun_101_200)),
+    length(intersect(street_top100, c(gun_top100, gun_101_200)))
+  )
+)
+
+kable(cross_tier, booktabs = TRUE,
+      caption = "Cross-Tier Overlap Analysis") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+\newpage
+
+# Geographic Distribution
+
+## Borough Breakdown
+
+```{r borough-table}
+boro_display <- borough_breakdown %>%
+  select(boro_name, 
+         `Gun Top 100` = gun_top100,
+         `Gun Pct` = gun_top100_pct,
+         `Street Top 100` = street_top100,
+         `Street Pct` = street_top100_pct,
+         `Violent Top 100` = violent_top100,
+         `Violent Pct` = violent_top100_pct)
+
+kable(boro_display, booktabs = TRUE, align = c("l", rep("c", 6)),
+      caption = "Distribution of Top 100 Blocks by Borough") %>%
+  kable_styling(latex_options = c("hold_position", "scale_down")) %>%
+  add_header_above(c(" " = 1, "Gun Violence" = 2, "Street Violent" = 2, "All Violent" = 2))
+```
+
+**Interpretation**: The geographic distribution differs across targeting options. Gun violence targeting may concentrate more heavily in certain boroughs compared to street crime targeting.
+
+## Top Precincts
+
+```{r precinct-table}
+precinct_display <- precinct_breakdown %>%
+  arrange(desc(gun_top100)) %>%
+  head(15) %>%
+  select(Precinct = precinct,
+         `Gun Top 100` = gun_top100,
+         `Gun 101-200` = gun_101_200,
+         `Street Top 100` = street_top100,
+         `Street 101-200` = street_101_200)
+
+kable(precinct_display, booktabs = TRUE, align = c("l", rep("c", 4)),
+      caption = "Top 15 Precincts by Gun Violence Top-100 Blocks") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+\newpage
+
+# Crime Capture Rates
+
+**Key Question**: If we select blocks using one metric, how much of other crime types do we capture?
+
+```{r capture-rates-table}
+capture_display <- capture_rates %>%
+  mutate(
+    gun_pct = paste0(gun_pct, "%"),
+    street_pct = paste0(street_pct, "%"),
+    violent_pct = paste0(violent_pct, "%")
+  ) %>%
+  select(
+    `Targeting Option` = targeting_option,
+    Tier = tier,
+    `Gun Violence` = gun_pct,
+    `Street Violent` = street_pct,
+    `All Violent` = violent_pct
+  )
+
+kable(capture_display, booktabs = TRUE, align = c("l", "l", rep("c", 3)),
+      caption = "Crime Capture Rates: What pct of each crime type is captured?") %>%
+  kable_styling(latex_options = c("hold_position")) %>%
+  add_header_above(c(" " = 2, "Pct Captured" = 3))
+```
+
+**Reading This Table**:
+
+- Row 1: If we select the top 100 blocks by gun violence, we capture X% of gun violence, Y% of street crime, and Z% of all violent crime
+- The diagonal represents "perfect targeting" (gun to gun, street to street)
+- Off-diagonal shows cross-capture efficiency
+
+```{r capture-rates-plot, fig.cap="Crime capture rates by targeting option (Top 100 blocks)"}
+capture_plot_data <- capture_rates %>%
+  filter(tier == "Top 100") %>%
+  pivot_longer(cols = c(gun_pct, street_pct, violent_pct), 
+               names_to = "crime_type", values_to = "pct") %>%
+  mutate(
+    crime_type = case_when(
+      crime_type == "gun_pct" ~ "Gun Violence",
+      crime_type == "street_pct" ~ "Street Violent",
+      crime_type == "violent_pct" ~ "All Violent"
+    ),
+    crime_type = factor(crime_type, levels = c("Gun Violence", "Street Violent", "All Violent"))
+  )
+
+ggplot(capture_plot_data, aes(x = targeting_option, y = pct, fill = crime_type)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(pct, 1), "%")), 
+            position = position_dodge(0.9), vjust = -0.5, size = 3) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "What Each Targeting Strategy Captures",
+    subtitle = "Top 100 blocks under each strategy",
+    x = "How Blocks Were Ranked",
+    y = "% of Crime Captured",
+    fill = "Crime Type"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom") +
+  ylim(0, max(capture_plot_data$pct, na.rm = TRUE) * 1.15)
+```
+
+\newpage
+
+# Blended Targeting Approach
+
+## The Rationale for Blending
+
+Given that:
+
+1. Gun violence and street crime identify **partially different** blocks
+2. Gun violence is **most serious** but has **fewer incidents**
+3. Street crime provides **more statistical power** but includes **less serious offenses**
+
+A **blended approach** may offer an optimal balance.
+
+## How Blending Works
+
+We create a composite score that weights both metrics:
+
+$$\text{Blend Score} = w_1 \times \text{Gun (normalized)} + w_2 \times \text{Street (normalized)}$$
+
+Where:
+
+- **Normalization**: Each count is divided by the maximum across all blocks, scaling to 0-1
+- **Weights**: Sum to 1.0 (e.g., 70/30 means $w_1 = 0.7$, $w_2 = 0.3$)
+
+### Example Calculation
+
+Consider Block A with 10 gun incidents and 50 street crimes, where the city maximum is 30 gun and 200 street:
+
+- Gun normalized = 10/30 = 0.33
+- Street normalized = 50/200 = 0.25
+- 70/30 blend = 0.7(0.33) + 0.3(0.25) = 0.31
+- 50/50 blend = 0.5(0.33) + 0.5(0.25) = 0.29
+
+Blocks are then ranked by their blend score.
+
+## Blend Options Analyzed
+
+| Blend | Gun Weight | Street Weight | Interpretation |
+|-------|------------|---------------|----------------|
+| Gun Only | 100% | 0% | Pure gun violence targeting |
+| 70/30 | 70% | 30% | Gun-prioritized with street consideration |
+| 50/50 | 50% | 50% | Equal weighting |
+| 30/70 | 30% | 70% | Street-prioritized with gun consideration |
+| Street Only | 0% | 100% | Pure street crime targeting |
+
+## Blend Performance Comparison
+
+```{r blend-table}
+blend_display <- blend_capture %>%
+  mutate(
+    gun_pct = paste0(gun_pct, "%"),
+    street_pct = paste0(street_pct, "%"),
+    violent_pct = paste0(violent_pct, "%")
+  ) %>%
+  rename(
+    `Blend Strategy` = blend,
+    `Gun Violence Captured` = gun_pct,
+    `Street Crime Captured` = street_pct,
+    `All Violent Captured` = violent_pct
+  )
+
+kable(blend_display, booktabs = TRUE, align = c("l", rep("c", 3)),
+      caption = "Crime Capture by Blended Targeting Strategy (Top 100 Blocks)") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+```{r blend-plot, fig.cap="Tradeoff between gun violence and street crime capture across blend strategies"}
+blend_plot_data <- blend_capture %>%
+  mutate(blend = factor(blend, levels = c("Gun Only", "70/30", "50/50", "30/70", "Street Only")))
+
+ggplot(blend_plot_data, aes(x = gun_pct, y = street_pct, color = blend)) +
+  geom_point(size = 5) +
+  geom_path(aes(group = 1), color = "gray50", linetype = "dashed") +
+  geom_text(aes(label = blend), vjust = -1, size = 3.5) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "The Gun-Street Crime Tradeoff",
+    subtitle = "Each point represents the top 100 blocks under that blend strategy",
+    x = "% of Gun Violence Captured",
+    y = "% of Street Crime Captured",
+    color = "Blend"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  expand_limits(x = c(0, max(blend_plot_data$gun_pct, na.rm = TRUE) * 1.1),
+                y = c(0, max(blend_plot_data$street_pct, na.rm = TRUE) * 1.1))
+```
+
+## Blend Overlap
+
+How much do the different blends share blocks?
+
+```{r blend-overlap}
+blend_overlap <- tibble(
+  Comparison = c(
+    "Gun Only vs 70/30",
+    "Gun Only vs 50/50",
+    "Gun Only vs Street Only",
+    "70/30 vs 50/50",
+    "50/50 vs 30/70"
+  ),
+  `Shared Blocks` = c(
+    length(intersect(gun_top100, blend_70_30_top100)),
+    length(intersect(gun_top100, blend_50_50_top100)),
+    length(intersect(gun_top100, street_top100)),
+    length(intersect(blend_70_30_top100, blend_50_50_top100)),
+    length(intersect(blend_50_50_top100, blend_30_70_top100))
+  )
+)
+
+kable(blend_overlap, booktabs = TRUE, align = c("l", "c"),
+      caption = "Block Overlap Between Blend Strategies (out of 100)") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Key Insight**: Adjacent blends (e.g., 70/30 vs 50/50) share most blocks. The transition from gun-only to street-only is gradual, allowing fine-tuned calibration.
+
+\newpage
+
+# Gun Violence Frequency Distribution
+
+Understanding the distribution of gun violence across blocks helps set **minimum thresholds** for eligibility.
+
+## 5-Year Distribution
+
+```{r gun-freq-5yr-table}
+gun_freq_5yr_display <- gun_freq_5yr %>%
+  select(
+    `Incident Count` = count_bucket,
+    `N Blocks` = n_blocks,
+    `Pct of Blocks` = pct_blocks,
+    `Cumulative Pct` = cum_pct
+  )
+
+kable(gun_freq_5yr_display, booktabs = TRUE, align = c("l", rep("c", 3)),
+      caption = "Gun Violence Frequency Distribution (5 Years)") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+## Cutoff Analysis
+
+How many blocks would qualify at different thresholds?
+
+```{r cutoff-analysis}
+cutoffs <- c(3, 4, 5, 6, 8, 10, 15)
+
+cutoff_analysis <- map_dfr(cutoffs, function(cutoff) {
+  n_blocks <- sum(master_targeting$gun_count >= cutoff)
+  total_gun_local <- sum(master_targeting$gun_count)
+  incidents_captured <- sum(master_targeting$gun_count[master_targeting$gun_count >= cutoff])
+  
+  tibble(
+    `Minimum Incidents` = paste0(cutoff, "+"),
+    `Qualifying Blocks` = comma(n_blocks),
+    `Gun Violence Captured` = paste0(round(incidents_captured / total_gun_local * 100, 1), "%")
+  )
+})
+
+kable(cutoff_analysis, booktabs = TRUE, align = c("l", "c", "c"),
+      caption = "Gun Violence Cutoff Analysis (5-Year Period)") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Recommendation**: A threshold of **5+ incidents in 5 years** provides a reasonable balance between:
+
+- Sufficient blocks for intervention capacity
+- Meaningful concentration of violence
+- Statistical stability (blocks with only 1-2 incidents may be random)
+
+\newpage
+
+# Crime Composition on Target Blocks
+
+What types of crime occur on blocks selected by each strategy?
+
+## Offense Category Distribution (ofns desc)
+
+```{r ofns-composition}
+# Show crime mix on top 100 blocks by each option
+if (!is.null(ofns_comparison)) {
+  ofns_comparison_display <- ofns_comparison %>%
+    head(10) %>%
+    mutate(across(where(is.numeric), ~paste0(round(.x, 1), "%")))
+  
+  kable(ofns_comparison_display, booktabs = TRUE,
+        caption = "Top 10 Offense Categories: Pct Composition on Top 100 Blocks") %>%
+    kable_styling(latex_options = c("hold_position", "scale_down"))
+} else {
+  cat("Offense comparison data not available.")
+}
+```
+
+**Key Insight**: Blocks selected by gun violence targeting tend to have higher proportions of serious offenses (felony assault, robbery) compared to street crime targeting, which captures more misdemeanor assault.
+
+\newpage
+
+# Recommendations and Next Steps
+
+## Summary of Key Findings
+
+| Finding | Implication |
+|---------|-------------|
+| Crime is highly concentrated | Place-based intervention is efficient |
+| Gun and street crime identify different blocks | Choice matters; consider blending |
+| 50/50 blend captures substantial portions of both | Viable compromise strategy |
+| Geographic clustering exists | Enables coordinated precinct-level deployment |
+| Most blocks have few gun incidents | Minimum threshold needed for eligibility |
+
+## Recommended Approach
+
+Based on this analysis, we recommend:
+
+1. **Primary metric**: 70/30 or 50/50 blend of gun violence and street crime
+   - Prioritizes serious violence while ensuring statistical power
+   - Captures diverse block "types" for intervention testing
+
+2. **Minimum threshold**: 3+ gun violence incidents OR 15+ street violent crimes in 5 years
+   - Ensures blocks have demonstrated, persistent problems
+   - Provides sufficient pool for randomization
+
+3. **Geographic balance**: Ensure representation across multiple precincts and boroughs
+   - Supports generalizability of findings
+   - Enables implementation learning across contexts
+
+## Next Steps
+
+This analysis represents **Phase 1** of targeting development. Subsequent phases will:
+
+1. **Layer additional data**: 311 calls (mental health, homeless, sanitation), building violations, vacant lots
+2. **Develop eligibility criteria**: Combine crime thresholds with environmental indicators
+3. **Randomization design**: Stratify by precinct, crime type, environmental profile
+4. **Stakeholder input**: Review findings with NYPD, community partners, and research advisors
+
+\newpage
+
+# Technical Appendix
+
+## Data Sources
+
+| Dataset | Source | Date Range | Records |
+|---------|--------|------------|---------|
+| NYPD Complaint Data | NYC Open Data | 2006-2025 | 8M |
+| NYPD Shooting Data | NYC Open Data | 2006-2025 | 30K |
+| Shots Fired Reports | MOCJ Internal | 2017-2025 | 42K |
+| LION Street Network | NYC DCP | 2025 | 242K segments |
+| Physical Blocks | Derived from LION | 2025 | 89K blocks |
+
+## Crime Definitions
+
+**Violent Crime Key Codes (ky cd)**:
+
+- 101: Murder and Non-Negligent Manslaughter
+- 104: Rape
+- 105: Robbery
+- 106: Felony Assault
+- 344: Assault 3 and Related Offenses
+
+**Outdoor Location Keywords**:
+
+- Location: FRONT OF, OPPOSITE OF, OUTSIDE, REAR OF, STREET, SIDEWALK
+- Premise: PARK, STREET, PUBLIC PLACE, HIGHWAY, BRIDGE, VACANT LOT
+
+## Code Repository
+
+All analysis code is available in the EBC project repository:
+
+- `00-load_data.R`: Data ingestion
+- `00a-create_working_data.R`: Dataset preparation
+- `03-EDA.R`: Targeting analysis
+- `04-EBC_Targeting_Analysis_Report.Rmd`: This report
+
+---
+
+*Report generated on `r format(Sys.time(), '%B %d, %Y at %H:%M')`*

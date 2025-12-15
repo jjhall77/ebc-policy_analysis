@@ -46,6 +46,19 @@ complaints_historic <- read_csv(
 
 complaints <- bind_rows(complaints_historic, complaints_current)
 
+
+#add some filter
+complaints <- complaints %>%
+  #remove menacing
+  filter(!pd_cd %in% c(111,114)) %>%
+  #remove rape, not geocoded correctly
+  filter(!ofns_desc == "RAPE")
+
+
+
+
+
+
 glimpse(complaints)
 
 

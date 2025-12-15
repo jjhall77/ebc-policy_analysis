@@ -180,3 +180,13 @@ st_crs(shots_fired)
 
 
 
+glimpse(violent_crime)
+#glimpse(property_crime)
+glimpse(violent_street_crime)
+#glimpse(property_street_crime)
+
+glimpse(nypd_precinct_locations_sf)
+glimpse(shootings_sf)
+glimpse(shots_fired)
+glimpse(physical_blocks)
+

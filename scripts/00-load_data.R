@@ -7,6 +7,12 @@ library(janitor)
 
 list.files(here("data/lion"))
 
+physical_blocks <- st_read(here("data",
+  "physical_blocks.gpkg"),
+  quiet = TRUE
+) %>%
+  st_transform(2263)
+
 # Path to the geodatabase
 lion_gdb <- here("data", "lion", "lion.gdb")
 

@@ -1,4 +1,5 @@
 #00-load_data
+options(scipen = 999)
 library(here)
 library(tidyverse)
 library(sf)

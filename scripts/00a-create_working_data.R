@@ -74,6 +74,109 @@ shootings_sf <- shootings %>%
 
 
 
+#comvine the shots fired datasets
+
+#-------------------------------------------------
+# 0) DEFINE CUTOFF DATE
+#-------------------------------------------------
+# Decision: cmplnt_key does NOT reliably link records across sources.
+# Strategy: enforce a clean temporal handoff between datasets.
+# Rule: sf_since_2017 ends the day BEFORE shots_fired_new begins.
+
+cutoff_date <- min(shots_fired_new$date, na.rm = TRUE)
+# e.g., 2022-09-12 → sf_since_2017 kept through 2022-09-11
+
+#-------------------------------------------------
+# 1) STANDARDIZE + CONDENSE EACH SOURCE
+#-------------------------------------------------
+# Decision: reduce each dataset to a shared "hybrid" schema
+# so bind_rows() works cleanly and semantics are aligned.
+
+# ---- shots_fired_since_2017 --------------------------------
+# Decision: keep ONLY records before cutoff_date
+# Rationale: avoid duplicate events in the overlap window
+
+sf_2017_std <- shots_fired_since_2017 %>%
+  filter(date < cutoff_date) %>%   # HARD STOP before new file begins
+  transmute(
+    source = "shots_fired_since_2017",   # provenance retained
+    date   = as.Date(date),
+    pct    = as.integer(pct),
+    
+    # Core classification fields
+    rpt_classfctn_desc = rpt_classfctn_desc,
+    pd_desc   = pd_desc,
+    ofns_desc = ofns_desc,
+    
+    # Geometry (NYC native coordinates)
+    x = as.numeric(x_coord_cd),
+    y = as.numeric(y_coord_cd)
+  )
+
+# ---- shots_fired_new ---------------------------------------
+# Decision: keep ONLY records from cutoff_date onward
+# Rationale: this file supersedes the older schema going forward
+
+sf_new_std <- shots_fired_new %>%
+  filter(date >= cutoff_date) %>%
+  transmute(
+    source = "shots_fired_new",
+    date   = as.Date(date),
+    pct    = as.integer(cmplnt_pct_cd),
+    
+    # Classification is thinner in new file; fill missing fields explicitly
+    rpt_classfctn_desc = rpt_classfctn_desc,
+    pd_desc   = NA_character_,
+    ofns_desc = NA_character_,
+    
+    # Geometry (same CRS as sf_since_2017)
+    x = as.numeric(x_coordinate_code),
+    y = as.numeric(y_coordinate_code)
+  )
+
+#-------------------------------------------------
+# 2) CONVERT EACH TO sf (EPSG:2263) *BEFORE* MERGE
+#-------------------------------------------------
+# Decision: enforce consistent CRS prior to binding.
+# Rationale: prevents silent geometry coercion and downstream bugs.
+
+sf_2017_sf <- sf_2017_std %>%
+  filter(!is.na(x), !is.na(y)) %>%     # Drop non-geocoded rows
+  st_as_sf(
+    coords = c("x", "y"),
+    crs    = 2263,
+    remove = FALSE
+  )
+
+sf_new_sf <- sf_new_std %>%
+  filter(!is.na(x), !is.na(y)) %>%
+  st_as_sf(
+    coords = c("x", "y"),
+    crs    = 2263,
+    remove = FALSE
+  )
+
+#-------------------------------------------------
+# 3) HYBRID sf DATASET (NO TEMPORAL OVERLAP)
+#-------------------------------------------------
+# Decision: simple bind_rows() is now safe
+# because:
+#   • schemas are identical
+#   • CRS is identical
+#   • time windows do not overlap
+
+shots_fired <- bind_rows(
+  sf_2017_sf,
+  sf_new_sf
+)
+
+#-------------------------------------------------
+# 4) SANITY CHECKS 
+#-------------------------------------------------
+range(shots_fired$date)      # confirm clean handoff
+shots_fired %>% count(source)
+st_crs(shots_fired)
+
 
 
 
